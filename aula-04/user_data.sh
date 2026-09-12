@@ -6,7 +6,7 @@ dnf update -y
 # Instalar Node.js e Git
 dnf install -y nodejs git
 
-# Criar diretório para a aplicação
+# Criar diretório da aplicação
 mkdir -p /opt/technova
 
 # Entrar no diretório
@@ -22,4 +22,4 @@ cd unifaat-devops-portfolio/aula-04/API/technova-api
 npm install
 
 # Iniciar a API
-nohup npm start > /var/log/technova-api.log 2>&1 &
+npm start
