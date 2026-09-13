@@ -4,7 +4,7 @@
 sudo dnf update -y
 
 # Instalar Node.js e Git
-dnf install -y nodejs git
+sudo dnf install -y nodejs git
 
 # Criar diretório da aplicação
 mkdir -p /opt/technova
