@@ -3,6 +3,7 @@
 # ============================================
 
 output "vpc_id" {
+
   description = "ID da VPC"
 
   value = aws_vpc.main.id
@@ -14,10 +15,14 @@ output "vpc_id" {
 # ============================================
 
 output "public_subnet_ids" {
+
   description = "Lista com IDs das subnets públicas"
 
+
   value = [
+
     aws_subnet.public_1.id,
+
     aws_subnet.public_2.id
   ]
 }
@@ -28,20 +33,25 @@ output "public_subnet_ids" {
 # ============================================
 
 output "private_subnet_ids" {
+
   description = "Lista com IDs das subnets privadas"
 
+
   value = [
+
     aws_subnet.private_1.id,
+
     aws_subnet.private_2.id
   ]
 }
 
 
 # ============================================
-# SECURITY GROUP API
+# SECURITY GROUP DA API
 # ============================================
 
 output "api_security_group_id" {
+
   description = "ID do Security Group da API"
 
   value = aws_security_group.api.id
@@ -49,10 +59,11 @@ output "api_security_group_id" {
 
 
 # ============================================
-# SECURITY GROUP DATABASE
+# SECURITY GROUP DO BANCO
 # ============================================
 
 output "db_security_group_id" {
+
   description = "ID do Security Group do banco"
 
   value = aws_security_group.database.id
@@ -60,10 +71,11 @@ output "db_security_group_id" {
 
 
 # ============================================
-# IP PÚBLICO
+# IP PÚBLICO DA EC2
 # ============================================
 
 output "ec2_public_ip" {
+
   description = "IP público da instância EC2"
 
   value = aws_instance.api.public_ip
@@ -75,7 +87,9 @@ output "ec2_public_ip" {
 # ============================================
 
 output "api_url" {
+
   description = "URL completa da API"
+
 
   value = "http://${aws_instance.api.public_ip}:3000"
 }
@@ -86,7 +100,9 @@ output "api_url" {
 # ============================================
 
 output "ssh_command" {
-  description = "Comando SSH para conectar na EC2"
 
-  value = "ssh -i technova-key.pem ec2-user@${aws_instance.api.public_ip}"
+  description = "Comando para conectar via SSH"
+
+
+  value = "ssh -i ${path.module}/technova-key.pem ec2-user@${aws_instance.api.public_ip}"
 }
