@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Atualizar o sistema
-dnf update -y
+sudo dnf update -y
 
 # Instalar Node.js e Git
 dnf install -y nodejs git
