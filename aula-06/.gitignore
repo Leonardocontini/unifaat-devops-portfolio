@@ -1,0 +1,14 @@
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+
+# Terraform variables with secrets
+**/terraform.tfvars
+**/*.tfvars
+
+# Terraform lock files can be committed
+# *.terraform.lock.hcl
+
