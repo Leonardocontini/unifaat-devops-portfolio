@@ -1,0 +1,119 @@
+
+name: AI Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "aula-09/**"
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  ai-review:
+    name: Analyze Pull Request
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Collect changed files
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git diff --no-ext-diff --unified=0 \
+            "$BASE_SHA" "$HEAD_SHA" -- aula-09/ \
+            > "$RUNNER_TEMP/review.diff"
+
+      - name: Run code analysis
+        id: review
+        continue-on-error: true
+        run: |
+          set +e
+          node aula-09/.github/scripts/ai-review.js \
+            "$RUNNER_TEMP/review.diff" \
+            > "$RUNNER_TEMP/review.json"
+          NODE_EXIT=$?
+          set -e
+          echo "exit_code=${NODE_EXIT}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish review comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPOSITORY: ${{ github.repository }}
+          REVIEW_FILE: ${{ runner.temp }}/review.json
+        run: |
+          node <<'NODE'
+          const fs = require("fs");
+          const { execFileSync } = require("child_process");
+
+          const file = process.env.REVIEW_FILE;
+          let result;
+
+          try {
+            result = JSON.parse(fs.readFileSync(file, "utf8"));
+          } catch {
+            result = {
+              findings: [],
+              counts: { CRITICAL: 0, WARNING: 0, INFO: 0 },
+              gate: "ERROR"
+            };
+          }
+
+          const findings = result.findings || [];
+          const counts = result.counts || {};
+
+          let body = [
+            "## AI Code Review",
+            "",
+            `**Quality gate:** ${result.gate}`,
+            "",
+            "| Severidade | Quantidade |",
+            "|---|---:|",
+            `| CRITICAL | ${counts.CRITICAL || 0} |`,
+            `| WARNING | ${counts.WARNING || 0} |`,
+            `| INFO | ${counts.INFO || 0} |`,
+            "",
+            "| Severidade | Problema | Linha no diff | Detalhes |",
+            "|---|---|---:|---|"
+          ].join("\n");
+
+          if (findings.length === 0) {
+            body += "\n| — | Nenhum padrão detectado | — | Continue com a revisão humana. |";
+          } else {
+            for (const f of findings) {
+              const clean = (s) => String(s || "").replace(/\|/g, "\\|").replace(/\n/g, " ");
+              body += `\n| ${clean(f.severity)} | ${clean(f.title)} | ${f.line} | ${clean(f.description)} |`;
+            }
+          }
+
+          body += "\n\n> Análise estática baseada em padrões. Não substitui revisão humana.";
+
+          execFileSync("gh", [
+            "pr", "comment", process.env.PR_NUMBER,
+            "--repo", process.env.REPOSITORY,
+            "--body", body
+          ], {
+            env: { ...process.env, GH_TOKEN: process.env.GH_TOKEN },
+            stdio: "inherit"
+          });
+          NODE
+
+      - name: Enforce quality gate
+        if: always()
+        run: |
+          if [ "${{ steps.review.outputs.exit_code }}" != "0" ]; then
+            echo "Quality gate reprovado: foram encontrados achados CRITICAL ou ocorreu erro na análise."
+            exit 1
+          fi
+
+          echo "Quality gate aprovado."
