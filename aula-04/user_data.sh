@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # Atualizar o sistema
-sudo dnf update -y
+dnf update -y
 
 # Instalar Node.js e Git
-sudo dnf install -y nodejs git
+dnf install -y nodejs git
 
 # Criar diretório da aplicação
 mkdir -p /opt/technova
