@@ -1,0 +1,80 @@
+name: AI Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "aula-09/**"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  ai-review:
+    name: Static AI Review
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Generate pull request diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git diff --no-ext-diff --unified=0 "$BASE_SHA...$HEAD_SHA" -- aula-09 > "$RUNNER_TEMP/ai-review.diff"
+
+      - name: Analyze diff
+        id: analysis
+        continue-on-error: true
+        run: node aula-09/.github/scripts/ai-review.js "$RUNNER_TEMP/ai-review.diff" > "$RUNNER_TEMP/ai-review.json"
+
+      - name: Comment on pull request
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          REPORT_PATH: ${{ runner.temp }}/ai-review.json
+          ANALYSIS_OUTCOME: ${{ steps.analysis.outcome }}
+        with:
+          script: |
+            const fs = require('fs');
+            let report;
+
+            try {
+              report = JSON.parse(fs.readFileSync(process.env.REPORT_PATH, 'utf8'));
+            } catch {
+              report = null;
+            }
+
+            let body = '## AI Code Review\n\n';
+            if (!report) {
+              body += '**Status: análise não concluída.** Verifique os logs do job.\n';
+            } else {
+              body += `**Quality gate: ${report.gate}**\n\n`;
+              body += `CRITICAL: ${report.counts.CRITICAL} | WARNING: ${report.counts.WARNING} | INFO: ${report.counts.INFO}\n\n`;
+              if (report.findings.length === 0) {
+                body += 'Nenhum padrão sinalizado foi encontrado nas linhas adicionadas.\n';
+              } else {
+                body += report.findings.map((finding) => {
+                  const code = finding.code.replace(/`/g, '\\`');
+                  return `- **${finding.severity}: ${finding.title}** (linha ${finding.line} do diff)\n  ${finding.description}\n  \`${code}\``;
+                }).join('\n');
+              }
+            }
+
+            await github.rest.issues.createComment({
+              ...context.issue,
+              body,
+            });
+
+      - name: Apply quality gate
+        if: steps.analysis.outcome == 'failure'
+        run: exit 1
