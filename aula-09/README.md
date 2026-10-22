@@ -10,10 +10,12 @@ Implementar um pipeline para construir e publicar imagens Docker no Amazon ECR e
 ## Estrutura do projeto
 
 ```text
+.github/
+└── workflows/
+  ├── ai-review.yml
+  └── ci.yml
 aula-09/
 ├── .github/
-│   ├── workflows/
-│   │   └── ai-review.yml
 │   └── scripts/
 │       └── ai-review.js
 ├── screenshots/
@@ -108,9 +110,9 @@ Para rollback, substitua `latest` por uma tag SHA ou SemVer que já tenha sido p
 
 ## AI Review
 
-O workflow `.github/workflows/ai-review.yml` é executado quando um Pull Request é aberto, atualizado ou reaberto, desde que haja alterações em `aula-09/`.
+O workflow `.github/workflows/ai-review.yml`, na raiz do repositório, é executado quando um Pull Request é aberto, atualizado ou reaberto, desde que haja alterações em `aula-09/`.
 
-O script `.github/scripts/ai-review.js` procura padrões como:
+O script `aula-09/.github/scripts/ai-review.js` procura padrões como:
 
 - Segredos hardcoded
 - Uso de `eval()`
