@@ -1,0 +1,114 @@
+name: CI — Build e Push no Amazon ECR
+
+# Requer três secrets configurados no repositório com as credenciais
+# temporárias do Learner Lab (renovar a cada sessão):
+#   AWS_ACCESS_KEY_ID
+#   AWS_SECRET_ACCESS_KEY
+#   AWS_SESSION_TOKEN
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*.*.*"
+    paths:
+      - "aula-09/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  REGION: us-east-1
+  REPOSITORY: technova-api
+
+jobs:
+  build-and-push:
+    name: Build e Push
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ env.REGION }}
+
+      - name: Login no Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Criar repositório ECR se não existir
+        run: |
+          aws ecr describe-repositories \
+            --repository-names "$REPOSITORY" \
+            --region "$REGION" >/dev/null 2>&1 || \
+          aws ecr create-repository \
+            --repository-name "$REPOSITORY" \
+            --region "$REGION" \
+            --image-scanning-configuration scanOnPush=true
+
+      - name: Calcular tags
+        id: tags
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+        run: |
+          GIT_SHA=$(git rev-parse --short HEAD)
+          IMAGE="${REGISTRY}/${REPOSITORY}"
+          SHA_TAG="sha-${GIT_SHA}"
+
+          TAGS="${IMAGE}:${SHA_TAG},${IMAGE}:latest"
+
+          # Tags SemVer quando o evento é uma tag vX.Y.Z
+          if [[ "${GITHUB_REF}" =~ ^refs/tags/v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            MAJOR="${BASH_REMATCH[1]}"
+            MINOR="${BASH_REMATCH[2]}"
+            PATCH="${BASH_REMATCH[3]}"
+            TAGS="${TAGS},${IMAGE}:${MAJOR}.${MINOR}.${PATCH}"
+            TAGS="${TAGS},${IMAGE}:${MAJOR}.${MINOR}"
+            TAGS="${TAGS},${IMAGE}:${MAJOR}"
+          fi
+
+          echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "sha_tag=${SHA_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Build da imagem Docker
+        working-directory: aula-09
+        run: |
+          docker build \
+            -f Dockerfile \
+            -t "${{ steps.tags.outputs.image }}:${{ steps.tags.outputs.sha_tag }}" \
+            .
+
+      - name: Tag e push de todas as versões
+        run: |
+          IMAGE="${{ steps.tags.outputs.image }}"
+          SHA_TAG="${{ steps.tags.outputs.sha_tag }}"
+
+          IFS=',' read -ra ALL_TAGS <<< "${{ steps.tags.outputs.tags }}"
+          for FULL_TAG in "${ALL_TAGS[@]}"; do
+            TAG="${FULL_TAG##*:}"
+            if [[ "$TAG" != "$SHA_TAG" ]]; then
+              docker tag "${IMAGE}:${SHA_TAG}" "${FULL_TAG}"
+            fi
+            docker push "${FULL_TAG}"
+          done
+
+      - name: Resumo da publicação
+        run: |
+          echo "### Publicação no ECR concluída" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Repositório:** \`${{ steps.tags.outputs.image }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Tags publicadas:**" >> "$GITHUB_STEP_SUMMARY"
+          IFS=',' read -ra ALL_TAGS <<< "${{ steps.tags.outputs.tags }}"
+          for FULL_TAG in "${ALL_TAGS[@]}"; do
+            echo "- \`${FULL_TAG##*:}\`" >> "$GITHUB_STEP_SUMMARY"
+          done

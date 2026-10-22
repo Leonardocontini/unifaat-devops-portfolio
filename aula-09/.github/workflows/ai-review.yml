@@ -1,0 +1,119 @@
+name: AI Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "aula-09/**"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  ai-review:
+    name: Static AI Review
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Generate pull request diff
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: git diff --no-ext-diff --unified=0 "$BASE_SHA...$HEAD_SHA" -- aula-09 > "$RUNNER_TEMP/ai-review.diff"
+
+      - name: Analyze diff
+        id: analysis
+        continue-on-error: true
+        run: node aula-09/.github/scripts/ai-review.js "$RUNNER_TEMP/ai-review.diff" > "$RUNNER_TEMP/ai-review.json"
+
+      - name: Comment on pull request
+        if: always()
+        uses: actions/github-script@v7
+        env:
+          REPORT_PATH: ${{ runner.temp }}/ai-review.json
+          ANALYSIS_OUTCOME: ${{ steps.analysis.outcome }}
+        with:
+          script: |
+            const fs = require('fs');
+            let report;
+
+            try {
+              report = JSON.parse(fs.readFileSync(process.env.REPORT_PATH, 'utf8'));
+            } catch {
+              report = null;
+            }
+
+            // Cabeçalho usado para localizar comentários anteriores deste bot
+            const COMMENT_HEADER = '<!-- ai-review-bot -->';
+
+            let body = `${COMMENT_HEADER}\n## 🤖 AI Code Review\n\n`;
+
+            if (!report) {
+              body += '**Status: análise não concluída.** Verifique os logs do job.\n';
+            } else {
+              const gateIcon = report.gate === 'BLOCKED' ? '🚫' : '✅';
+              body += `**Quality Gate: ${gateIcon} ${report.gate}**\n\n`;
+              body += `| Severidade | Quantidade |\n`;
+              body += `|-----------|:----------:|\n`;
+              body += `| 🔴 CRITICAL | ${report.counts.CRITICAL} |\n`;
+              body += `| 🟡 WARNING  | ${report.counts.WARNING} |\n`;
+              body += `| 🔵 INFO     | ${report.counts.INFO} |\n\n`;
+
+              if (report.findings.length === 0) {
+                body += '✅ Nenhum padrão sinalizado foi encontrado nas linhas adicionadas.\n';
+              } else {
+                body += `### Achados (${report.findings.length})\n\n`;
+                body += `| Severidade | Padrão | Linha | Trecho |\n`;
+                body += `|-----------|--------|:-----:|--------|\n`;
+                for (const f of report.findings) {
+                  const sev = f.severity === 'CRITICAL' ? '🔴 CRITICAL'
+                    : f.severity === 'WARNING' ? '🟡 WARNING'
+                    : '🔵 INFO';
+                  const code = f.code.replace(/\|/g, '\\|').replace(/`/g, "'").slice(0, 80);
+                  body += `| ${sev} | **${f.title}** | ${f.line} | \`${code}\` |\n`;
+                }
+                body += '\n';
+                body += `> ${report.gate === 'BLOCKED'
+                  ? '🚫 **Pipeline bloqueado:** corrija os achados CRITICAL antes do merge.'
+                  : '⚠️ Revise os achados acima antes de fazer o merge.'}\n`;
+              }
+            }
+
+            // Busca comentário anterior do bot para atualizar em vez de duplicar
+            const { data: comments } = await github.rest.issues.listComments({
+              ...context.issue,
+              per_page: 100,
+            });
+
+            const existing = comments.find(
+              (c) => c.user.type === 'Bot' && c.body.includes(COMMENT_HEADER)
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                ...context.issue,
+                body,
+              });
+            }
+
+      - name: Apply quality gate
+        if: steps.analysis.outcome == 'failure'
+        run: exit 1
