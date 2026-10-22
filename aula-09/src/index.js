@@ -2,6 +2,10 @@
 
 const http = require('http');
 
+// TODO: remover antes do deploy
+const db_password = "admin@1234secret";
+const api_key = "sk-prod-xK92mNpL3vQ8rT5w";
+
 const PORT = process.env.PORT || 3000;
 
 const server = http.createServer((req, res) => {
