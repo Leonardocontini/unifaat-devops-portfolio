@@ -1,0 +1,92 @@
+name: Terraform — Apply on Merge
+
+# Requer os mesmos três secrets do Learner Lab:
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN
+#
+# Em produção fora do Lab, substituir por OIDC + IAM Role (sem chaves armazenadas).
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "aula-10/terraform/**/*.tf"
+      - "aula-10/terraform/**/*.tfvars"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TF_VERSION: "1.9.5"
+  TF_WORKING_DIR: aula-10/terraform
+  AWS_REGION: us-east-1
+
+jobs:
+  terraform-apply:
+    name: Terraform Apply
+    runs-on: ubuntu-latest
+
+    # Habilite GitHub Environments para adicionar aprovação manual antes do apply:
+    # environment: production
+
+    defaults:
+      run:
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar credenciais AWS (Learner Lab)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token:     ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Verificar identidade AWS
+        run: aws sts get-caller-identity
+
+      - name: Instalar Terraform ${{ env.TF_VERSION }}
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: terraform init
+        run: terraform init
+
+      - name: terraform validate
+        run: terraform validate -no-color
+
+      - name: terraform apply
+        run: |
+          terraform apply \
+            -var-file="terraform.tfvars" \
+            -auto-approve \
+            -no-color
+
+      - name: Capturar outputs do Terraform
+        id: tf-output
+        run: |
+          EC2_IP=$(terraform output -raw ec2_public_ip 2>/dev/null || echo "N/A")
+          ECR_URL=$(terraform output -raw ecr_repository_url 2>/dev/null || echo "N/A")
+          HEALTH_URL=$(terraform output -raw health_check_url 2>/dev/null || echo "N/A")
+
+          echo "ec2_ip=${EC2_IP}"     >> "$GITHUB_OUTPUT"
+          echo "ecr_url=${ECR_URL}"   >> "$GITHUB_OUTPUT"
+          echo "health_url=${HEALTH_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Resumo do apply
+        run: |
+          echo "### ✅ Terraform Apply concluído" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Recurso | Valor |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| EC2 IP | \`${{ steps.tf-output.outputs.ec2_ip }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| ECR URL | \`${{ steps.tf-output.outputs.ecr_url }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Health Check | \`${{ steps.tf-output.outputs.health_url }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Commit:** \`${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Executado por:** @${{ github.actor }}" >> "$GITHUB_STEP_SUMMARY"

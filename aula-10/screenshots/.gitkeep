@@ -1,0 +1,5 @@
+# Adicione aqui os screenshots após executar os workflows:
+#   plan-pr-comment.png    — plan como comentário no PR
+#   apply-success.png      — apply executado com sucesso após merge
+#   cd-pipeline-green.png  — pipeline CD completo verde
+#   health-check-pass.png  — health check passando no log do workflow

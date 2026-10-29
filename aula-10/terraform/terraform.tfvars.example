@@ -1,0 +1,10 @@
+# Copie este arquivo para terraform.tfvars e preencha com seus valores.
+# NÃO comite o terraform.tfvars (já está no .gitignore).
+
+aws_region       = "us-east-1"
+project_name     = "technova-aula10"
+environment      = "dev"
+instance_type    = "t3.micro"
+key_name         = "minha-chave-ec2"       # nome do par de chaves no seu Lab
+allowed_ssh_cidr = "0.0.0.0/0"            # restrinja ao IP do runner em produção
+app_port         = 3000

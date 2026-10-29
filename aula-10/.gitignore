@@ -1,0 +1,20 @@
+# Terraform
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+terraform/terraform.tfstate
+terraform/terraform.tfstate.backup
+terraform/terraform.tfvars
+terraform/tfplan
+terraform/plan-output.txt
+
+# Node
+technova-api/node_modules/
+technova-api/coverage/
+
+# Ambiente
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
