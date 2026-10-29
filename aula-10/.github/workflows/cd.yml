@@ -1,0 +1,260 @@
+name: CD — Lint → Test → Build → Push → Deploy
+
+# Pipeline de Continuous Delivery da TechNova API.
+#
+# Secrets necessários:
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN  — credenciais Learner Lab
+#   EC2_HOST     — IP público da EC2 (ex: 54.x.x.x)
+#   EC2_USER     — usuário SSH (ex: ec2-user)
+#   EC2_SSH_KEY  — chave privada PEM (conteúdo do arquivo, não o caminho)
+#
+# Variáveis de repositório (Settings → Variables):
+#   ECR_REPOSITORY  — nome do repositório ECR (ex: technova-aula10-api)
+#   AWS_ACCOUNT_ID  — ID da conta AWS (ex: 123456789012)
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "aula-10/technova-api/**"
+      - "aula-10/Dockerfile"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION:     us-east-1
+  APP_PORT:       3000
+  CONTAINER_NAME: technova-api
+
+jobs:
+  # ── Job 1: Lint ────────────────────────────────────────────────────────────
+  lint:
+    name: Lint (ESLint)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: aula-10/technova-api
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: aula-10/technova-api/package-lock.json
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Executar ESLint
+        run: npm run lint
+
+  # ── Job 2: Test ────────────────────────────────────────────────────────────
+  test:
+    name: Testes (Jest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: aula-10/technova-api
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: aula-10/technova-api/package-lock.json
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Executar testes
+        run: npm test
+
+  # ── Job 3: Build & Push no ECR ────────────────────────────────────────────
+  build-push:
+    name: Build & Push (ECR)
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+
+    outputs:
+      image_uri: ${{ steps.tags.outputs.image_uri }}
+      sha_tag:   ${{ steps.tags.outputs.sha_tag }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurar credenciais AWS (Learner Lab)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token:     ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      - name: Login no Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Garantir repositório ECR existe
+        run: |
+          aws ecr describe-repositories \
+            --repository-names "${{ vars.ECR_REPOSITORY }}" \
+            --region "${{ env.AWS_REGION }}" >/dev/null 2>&1 || \
+          aws ecr create-repository \
+            --repository-name "${{ vars.ECR_REPOSITORY }}" \
+            --region "${{ env.AWS_REGION }}" \
+            --image-scanning-configuration scanOnPush=true
+
+      - name: Calcular tags da imagem
+        id: tags
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+        run: |
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          SHA_TAG="sha-${SHORT_SHA}"
+          IMAGE="${REGISTRY}/${{ vars.ECR_REPOSITORY }}"
+
+          echo "sha_tag=${SHA_TAG}"                   >> "$GITHUB_OUTPUT"
+          echo "image_uri=${IMAGE}:${SHA_TAG}"         >> "$GITHUB_OUTPUT"
+          echo "image_base=${IMAGE}"                   >> "$GITHUB_OUTPUT"
+          echo "registry=${REGISTRY}"                 >> "$GITHUB_OUTPUT"
+
+      - name: Build da imagem Docker (multi-stage)
+        run: |
+          docker build \
+            --file aula-10/Dockerfile \
+            --build-arg GITHUB_SHA="${{ github.sha }}" \
+            --tag "${{ steps.tags.outputs.image_uri }}" \
+            --label "git.sha=${{ github.sha }}" \
+            --label "git.ref=${{ github.ref }}" \
+            aula-10/
+
+      - name: Push SHA tag
+        run: docker push "${{ steps.tags.outputs.image_uri }}"
+
+      - name: Tag e Push latest
+        run: |
+          LATEST="${{ steps.tags.outputs.image_base }}:latest"
+          docker tag "${{ steps.tags.outputs.image_uri }}" "${LATEST}"
+          docker push "${LATEST}"
+
+      - name: Resumo do build
+        run: |
+          echo "### 🐳 Build & Push concluídos" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Tag | URI |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-----|-----|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| \`${{ steps.tags.outputs.sha_tag }}\` | \`${{ steps.tags.outputs.image_uri }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| \`latest\` | \`${{ steps.tags.outputs.image_base }}:latest\` |" >> "$GITHUB_STEP_SUMMARY"
+
+  # ── Job 4: Deploy (Recreate) na EC2 ───────────────────────────────────────
+  deploy:
+    name: Deploy (Recreate) na EC2
+    runs-on: ubuntu-latest
+    needs: build-push
+
+    steps:
+      - name: Deploy via SSH — Estratégia Recreate
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:        ${{ secrets.EC2_HOST }}
+          username:    ${{ secrets.EC2_USER }}
+          key:         ${{ secrets.EC2_SSH_KEY }}
+          timeout:     120s
+          script_stop: true
+          script: |
+            set -euo pipefail
+
+            REGION="${{ env.AWS_REGION }}"
+            ACCOUNT_ID="${{ vars.AWS_ACCOUNT_ID }}"
+            ECR_REPO="${{ vars.ECR_REPOSITORY }}"
+            IMAGE_URI="${{ needs.build-push.outputs.image_uri }}"
+            CONTAINER="${{ env.CONTAINER_NAME }}"
+            APP_PORT="${{ env.APP_PORT }}"
+            GITHUB_SHA="${{ github.sha }}"
+
+            echo "==> [1/5] Login no ECR"
+            aws ecr get-login-password --region "${REGION}" \
+              | docker login \
+                  --username AWS \
+                  --password-stdin \
+                  "${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
+
+            echo "==> [2/5] Pull da nova imagem: ${IMAGE_URI}"
+            docker pull "${IMAGE_URI}"
+
+            echo "==> [3/5] Parar container existente (se houver)"
+            docker stop "${CONTAINER}" || true
+
+            echo "==> [4/5] Remover container existente (se houver)"
+            docker rm "${CONTAINER}" || true
+
+            echo "==> [5/5] Iniciar novo container"
+            docker run -d \
+              --name "${CONTAINER}" \
+              --restart unless-stopped \
+              -p "${APP_PORT}:${APP_PORT}" \
+              -e NODE_ENV=production \
+              -e GITHUB_SHA="${GITHUB_SHA}" \
+              "${IMAGE_URI}"
+
+            echo "==> Container iniciado. Aguardando inicialização..."
+            sleep 10
+
+      - name: Health check pós-deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:        ${{ secrets.EC2_HOST }}
+          username:    ${{ secrets.EC2_USER }}
+          key:         ${{ secrets.EC2_SSH_KEY }}
+          timeout:     60s
+          script_stop: true
+          script: |
+            set -euo pipefail
+
+            APP_PORT="${{ env.APP_PORT }}"
+            HEALTH_URL="http://localhost:${APP_PORT}/health"
+            MAX_RETRIES=10
+            RETRY_INTERVAL=6
+
+            echo "==> Health check em: ${HEALTH_URL}"
+
+            for i in $(seq 1 "${MAX_RETRIES}"); do
+              echo "Tentativa ${i}/${MAX_RETRIES}..."
+              STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${HEALTH_URL}" 2>/dev/null || echo "000")
+
+              if [ "${STATUS}" = "200" ]; then
+                BODY=$(curl -s "${HEALTH_URL}")
+                echo "✅ Health check PASSOU (HTTP 200)"
+                echo "   Resposta: ${BODY}"
+                exit 0
+              fi
+
+              echo "   Status: ${STATUS} — aguardando ${RETRY_INTERVAL}s..."
+              sleep "${RETRY_INTERVAL}"
+            done
+
+            echo "❌ Health check FALHOU após ${MAX_RETRIES} tentativas"
+            echo "==> Logs do container para diagnóstico:"
+            docker logs --tail 50 "${{ env.CONTAINER_NAME }}" || true
+            exit 1
+
+      - name: Resumo do deploy
+        if: always()
+        run: |
+          echo "### 🚀 Deploy — ${{ job.status }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Campo | Valor |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Imagem | \`${{ needs.build-push.outputs.image_uri }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Commit | \`${{ github.sha }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Host | \`${{ secrets.EC2_HOST }}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Status | ${{ job.status }} |" >> "$GITHUB_STEP_SUMMARY"
